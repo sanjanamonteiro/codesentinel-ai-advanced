@@ -222,3 +222,35 @@ export function detectEmptyExceptionHandling(code: string): Finding[] {
 
   return findings;
 }
+
+export function detectRiskyFloatEquality(code: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = code.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    if (
+      /\b(?:float|double)\s*\([^)]*\)\s*==|==\s*(?:float|double)\s*\(/.test(trimmed) ||
+      /\b\d+\.\d+\s*==|==\s*\d+\.\d+/.test(trimmed)
+    ) {
+      findings.push({
+        id: `BUG-FLOAT-EQUALITY-${i + 1}`,
+        ruleId: "BUG-FLOAT-001",
+        title: "Potential risky floating-point equality",
+        severity: "LOW",
+        line: i + 1,
+        message:
+          "Exact equality involving floating-point values may produce unexpected results.",
+        evidence: trimmed,
+        recommendation:
+          "Consider math.isclose() in Python or an appropriate tolerance for your language and use case.",
+      });
+    }
+  }
+
+  return findings;
+}
