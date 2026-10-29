@@ -181,3 +181,44 @@ export function detectUnreachableCode(code: string): Finding[] {
 
   return findings;
 }
+
+export function detectEmptyExceptionHandling(code: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = code.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+
+    if (/^except(?:\s+[^:]+)?\s*:\s*(?:pass)?\s*(?:#.*)?$/.test(trimmed)) {
+      const nextLine = lines[i + 1]?.trim() ?? "";
+
+      if (trimmed.endsWith(":") && nextLine === "pass") {
+        findings.push({
+          id: `BUG-EXCEPTION-${i + 2}`,
+          ruleId: "BUG-EXCEPTION-001",
+          title: "Empty exception handler",
+          severity: "MEDIUM",
+          line: i + 2,
+          message: "This exception handler silently ignores an error.",
+          evidence: lines[i + 1].trim(),
+          recommendation:
+            "Handle the exception explicitly or log the error instead of silently ignoring it.",
+        });
+      } else if (/\bpass\b/.test(trimmed)) {
+        findings.push({
+          id: `BUG-EXCEPTION-${i + 1}`,
+          ruleId: "BUG-EXCEPTION-001",
+          title: "Empty exception handler",
+          severity: "MEDIUM",
+          line: i + 1,
+          message: "This exception handler silently ignores an error.",
+          evidence: trimmed,
+          recommendation:
+            "Handle the exception explicitly or log the error instead of silently ignoring it.",
+        });
+      }
+    }
+  }
+
+  return findings;
+}
