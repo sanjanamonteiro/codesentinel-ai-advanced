@@ -1,674 +1,632 @@
-import { useState, useEffect, useRef } from "react";
+﻿
+import { useMemo, useState } from "react";
+import { detectDivisionByZero } from "./analyzer";
 
-const SAMPLE_CODE = `def login(username, password):
-    query = "SELECT * FROM users WHERE user='" + username + "' AND pass='" + password + "'"
-    result = db.execute(query)
-    if result:
-        token = username + "_token_" + str(123)
-        return token`;
+type Tab = "analysis" | "findings" | "improvements";
 
-const MOCK_REVIEW = {
-  bugs: { score: 7, items: ["SQL query returns entire user record unnecessarily", "Token generation is predictable and non-random"] },
-  security: { level: "Critical", items: ["SQL Injection vulnerability — raw string concatenation with user input", "Hardcoded token suffix '123' is cryptographically insecure", "No password hashing — plaintext comparison detected"] },
-  performance: { score: 5, items: ["Query fetches all columns (*) instead of specific fields", "No connection pooling or query parameterization"] },
-  quality: { score: 3, items: ["No input validation or sanitization", "No error handling for DB failures", "Magic number '123' in token generation"] },
-  improvements: ["Use parameterized queries to prevent SQL injection", "Hash passwords with bcrypt before comparison", "Generate tokens using secrets.token_hex(32)", "Select only required columns in query", "Add try/except for database error handling"],
-  fixedCode: `import bcrypt
-import secrets
-import sqlite3
-
-def login(username: str, password: str) -> str | None:
-    """
-    Secure login with parameterized query and hashed passwords.
-    Returns a cryptographically secure token on success, None on failure.
-    """
-    if not username or not password:
-        raise ValueError("Username and password are required.")
-
-    try:
-        conn = sqlite3.connect("users.db")
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, password_hash FROM users WHERE username = ?",
-            (username,)
-        )
-        row = cursor.fetchone()
-    except sqlite3.Error as e:
-        raise RuntimeError(f"Database error: {e}") from e
-    finally:
-        conn.close()
-
-    if row and bcrypt.checkpw(password.encode(), row[1].encode()):
-        return secrets.token_hex(32)
-
-    return None`
+type FindingItem = {
+  id: string;
+  ruleId: string;
+  title: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  line: number;
+  message: string;
+  evidence: string;
+  recommendation: string;
 };
 
-function ScoreRing({ score, color, size = 64 }) {
-  const radius = 26;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 10) * circumference;
+const SAMPLE_CODE = `def divide(a, b):
+    return a / b
+
+print(divide(10, 0))`;
+
+const STARTER_CODE = `def calculate_average(total, count):
+    return total / count
+
+print(calculate_average(100, 0))`;
+
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: "100vh",
+    background: "#0b1120",
+    color: "#e5edf8",
+    fontFamily: "Inter, Segoe UI, Arial, sans-serif",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    flexWrap: "wrap",
+    padding: "18px 5%",
+    borderBottom: "1px solid #253148",
+    background: "#0f1728",
+  },
+  brand: { display: "flex", alignItems: "center", gap: 12 },
+  logo: {
+    width: 42,
+    height: 42,
+    display: "grid",
+    placeItems: "center",
+    borderRadius: 12,
+    background: "#153d54",
+    border: "1px solid #287e9c",
+    color: "#67e8f9",
+    fontWeight: 800,
+    fontSize: 21,
+  },
+  muted: { color: "#91a2ba" },
+  container: { maxWidth: 1250, margin: "0 auto", padding: "32px 5%" },
+  panel: {
+    background: "#111c2e",
+    border: "1px solid #263750",
+    borderRadius: 14,
+    padding: 22,
+    minWidth: 0,
+  },
+  button: {
+    background: "#0891b2",
+    color: "#ffffff",
+    border: 0,
+    borderRadius: 8,
+    padding: "11px 16px",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  secondaryButton: {
+    background: "#1b2940",
+    color: "#dbeafe",
+    border: "1px solid #34445e",
+    borderRadius: 8,
+    padding: "10px 13px",
+    cursor: "pointer",
+  },
+  input: {
+    width: "100%",
+    boxSizing: "border-box",
+    background: "#080f1c",
+    color: "#dbeafe",
+    border: "1px solid #2a3b54",
+    borderRadius: 9,
+    padding: 15,
+    fontFamily: "Consolas, Monaco, monospace",
+    fontSize: 14,
+    lineHeight: 1.65,
+    resize: "vertical",
+  },
+  label: { fontSize: 13, fontWeight: 700, color: "#b8c7dc" },
+};
+
+function Metric({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string | number;
+  description: string;
+}) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64">
-      <circle cx="32" cy="32" r={radius} fill="none" stroke="#1e2433" strokeWidth="6" />
-      <circle
-        cx="32" cy="32" r={radius} fill="none"
-        stroke={color} strokeWidth="6"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-        strokeLinecap="round"
-        transform="rotate(-90 32 32)"
-        style={{ transition: "stroke-dashoffset 1s ease" }}
-      />
-      <text x="32" y="37" textAnchor="middle" fill={color} fontSize="14" fontWeight="700" fontFamily="'Space Mono', monospace">{score}</text>
-    </svg>
+    <div style={styles.panel}>
+      <div style={styles.muted}>{label}</div>
+      <div style={{ fontSize: 30, fontWeight: 800, margin: "10px 0" }}>
+        {value}
+      </div>
+      <div style={{ ...styles.muted, fontSize: 12 }}>{description}</div>
+    </div>
   );
 }
 
-function SeverityBadge({ level }) {
-  const colors = {
-    Critical: { bg: "#3d1515", border: "#ef4444", text: "#fca5a5" },
-    High: { bg: "#3d2515", border: "#f97316", text: "#fdba74" },
-    Medium: { bg: "#3d3515", border: "#eab308", text: "#fde047" },
-    Low: { bg: "#1a2d1a", border: "#22c55e", text: "#86efac" },
+function FindingCard({ finding }: { finding: FindingItem }) {
+  const severityColors = {
+    HIGH: { text: "#fca5a5", border: "#7f303d", bg: "#351b29" },
+    MEDIUM: { text: "#fcd34d", border: "#705b29", bg: "#332b1a" },
+    LOW: { text: "#86efac", border: "#28634b", bg: "#173126" },
   };
-  const c = colors[level] || colors.Low;
-  return (
-    <span style={{
-      background: c.bg, border: `1px solid ${c.border}`, color: c.text,
-      padding: "2px 10px", borderRadius: "4px", fontSize: "11px",
-      fontWeight: "700", letterSpacing: "1px", fontFamily: "'Space Mono', monospace"
-    }}>{level}</span>
-  );
-}
 
-function TypewriterText({ text, speed = 8 }) {
-  const [displayed, setDisplayed] = useState("");
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    setDisplayed("");
-    setDone(false);
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i < text.length) {
-        setDisplayed(text.slice(0, i + 1));
-        i++;
-      } else {
-        setDone(true);
-        clearInterval(interval);
-      }
-    }, speed);
-    return () => clearInterval(interval);
-  }, [text]);
-  return <span>{displayed}{!done && <span style={{ animation: "blink 1s step-end infinite", opacity: 1 }}>▌</span>}</span>;
-}
+  const color = severityColors[finding.severity];
 
-function HistoryItem({ item, index }) {
-  const [open, setOpen] = useState(false);
   return (
-    <div style={{
-      border: "1px solid #1e2a3a", borderRadius: "8px", marginBottom: "10px",
-      overflow: "hidden", transition: "border-color 0.2s",
-    }}>
-      <button onClick={() => setOpen(o => !o)} style={{
-        width: "100%", background: "#0d1117", border: "none", padding: "14px 18px",
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-        cursor: "pointer", color: "#c9d1d9"
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <span style={{ color: "#30a14e", fontFamily: "'Space Mono', monospace", fontSize: "12px" }}>#{String(index + 1).padStart(3, "0")}</span>
-          <span style={{ fontSize: "13px", fontWeight: "500" }}>{item.preview}</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <SeverityBadge level={item.severity} />
-          <span style={{ color: "#6e7681", fontSize: "12px" }}>{item.time}</span>
-          <span style={{ color: "#58a6ff", fontSize: "16px" }}>{open ? "▲" : "▼"}</span>
-        </div>
-      </button>
-      {open && (
-        <div style={{ padding: "16px 18px", borderTop: "1px solid #1e2a3a", background: "#0a0e17" }}>
-          <pre style={{ color: "#8b949e", fontSize: "12px", fontFamily: "'Space Mono', monospace", margin: 0, overflow: "auto" }}>{item.code}</pre>
-        </div>
-      )}
+    <div
+      style={{
+        background: "#0b1423",
+        border: "1px solid #293950",
+        borderRadius: 11,
+        padding: 17,
+        marginTop: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
+        <strong>{finding.title}</strong>
+        <span
+          style={{
+            color: color.text,
+            background: color.bg,
+            border: `1px solid ${color.border}`,
+            padding: "4px 8px",
+            borderRadius: 5,
+            fontSize: 11,
+            fontWeight: 800,
+          }}
+        >
+          {finding.severity}
+        </span>
+      </div>
+
+      <p style={{ ...styles.muted, fontSize: 12 }}>
+        {finding.ruleId} | Line {finding.line}
+      </p>
+
+      <p style={{ lineHeight: 1.6 }}>{finding.message}</p>
+
+      <div style={{ marginTop: 12 }}>
+        <div style={styles.label}>Evidence</div>
+        <pre
+          style={{
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            background: "#070d17",
+            borderRadius: 7,
+            padding: 12,
+            color: "#c4d5eb",
+            fontSize: 12,
+          }}
+        >
+          {finding.evidence}
+        </pre>
+      </div>
+
+      <div
+        style={{
+          marginTop: 12,
+          padding: 12,
+          borderRadius: 7,
+          background: "#102c36",
+          color: "#a5f3fc",
+          lineHeight: 1.6,
+        }}
+      >
+        <strong>Recommended fix:</strong> {finding.recommendation}
+      </div>
     </div>
   );
 }
 
 export default function App() {
   const [code, setCode] = useState(SAMPLE_CODE);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [activeTab, setActiveTab] = useState("review");
-  const [copied, setCopied] = useState(false);
-  const [history] = useState([
-    { preview: "def login(username, password)...", severity: "Critical", time: "2 min ago", code: SAMPLE_CODE },
-    { preview: "class UserManager: def __init__...", severity: "High", time: "1 hr ago", code: "class UserManager:\n    def __init__(self):\n        self.users = {}" },
-    { preview: "import os; exec(user_input)", severity: "Critical", time: "3 hrs ago", code: "import os\nexec(user_input)" },
-  ]);
-  const resultRef = useRef(null);
+  const [language, setLanguage] = useState("Python");
+  const [activeTab, setActiveTab] = useState<Tab>("analysis");
+  const [findings, setFindings] = useState<FindingItem[]>([]);
+  const [hasAnalyzed, setHasAnalyzed] = useState(false);
+  const [status, setStatus] = useState("Ready to analyze");
+  const [history, setHistory] = useState<
+    { language: string; time: string; count: number }[]
+  >([]);
 
-  const handleAnalyze = async () => {
-    if (!code.trim()) return;
-    setLoading(true);
-    setResult(null);
-    
-    try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: `You are an expert Senior Software Engineer and AI Code Reviewer. Analyze the code and return ONLY a valid JSON object with this exact structure (no markdown, no backticks, no preamble):
-{
-  "bugs": { "score": <0-10>, "items": ["..."] },
-  "security": { "level": "<Critical|High|Medium|Low>", "items": ["..."] },
-  "performance": { "score": <0-10>, "items": ["..."] },
-  "quality": { "score": <0-10>, "items": ["..."] },
-  "improvements": ["..."],
-  "fixedCode": "<complete corrected code as string>"
-}`,
-          messages: [{ role: "user", content: `Review this code:\n\n${code}` }]
-        })
-      });
-      const data = await response.json();
-      const text = data.content?.map(i => i.text || "").join("") || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
-      setResult(parsed);
-    } catch (err) {
-      // Fallback to mock for demo
-      await new Promise(r => setTimeout(r, 1800));
-      setResult(MOCK_REVIEW);
+  const highCount = useMemo(
+    () => findings.filter((item) => item.severity === "HIGH").length,
+    [findings]
+  );
+
+  function analyzeCode() {
+    if (!code.trim()) {
+      setStatus("Please enter code before starting the analysis.");
+      setFindings([]);
+      setHasAnalyzed(false);
+      return;
     }
-    
-    setLoading(false);
-    setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-  };
 
-  const copyFixed = () => {
-    if (result?.fixedCode) {
-      navigator.clipboard.writeText(result.fixedCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+    const results: FindingItem[] = [];
+
+    if (language === "Python") {
+      results.push(...detectDivisionByZero(code));
     }
-  };
 
-  const lineCount = code.split("\n").length;
+    const lines = code.split(/\r?\n/);
+
+    lines.forEach((line, index) => {
+      if (/\beval\s*\(/.test(line)) {
+        results.push({
+          id: `eval-${index + 1}`,
+          ruleId: "SEC-EVAL-001",
+          title: "Use of eval",
+          severity: "HIGH",
+          line: index + 1,
+          message:
+            "eval can execute dynamically supplied expressions and may be dangerous with untrusted input.",
+          evidence: line.trim(),
+          recommendation:
+            "Avoid eval where possible. Use a safe parser or explicitly validate permitted inputs.",
+        });
+      }
+
+      if (/\bTODO\b|\bFIXME\b/.test(line)) {
+        results.push({
+          id: `todo-${index + 1}`,
+          ruleId: "MAINT-TODO-001",
+          title: "Unfinished code marker",
+          severity: "LOW",
+          line: index + 1,
+          message: "This line contains a TODO or FIXME marker.",
+          evidence: line.trim(),
+          recommendation:
+            "Review this marker and complete or document the outstanding work.",
+        });
+      }
+
+      if (/\bconsole\.log\s*\(/.test(line)) {
+        results.push({
+          id: `log-${index + 1}`,
+          ruleId: "QUAL-LOG-001",
+          title: "Debug logging detected",
+          severity: "LOW",
+          line: index + 1,
+          message:
+            "Console logging may expose unnecessary information or clutter production output.",
+          evidence: line.trim(),
+          recommendation:
+            "Remove unnecessary debug statements or use a controlled logging system.",
+        });
+      }
+    });
+
+    const uniqueResults = results.filter(
+      (item, index, all) =>
+        all.findIndex((other) => other.id === item.id) === index
+    );
+
+    setFindings(uniqueResults);
+    setHasAnalyzed(true);
+    setActiveTab("analysis");
+    setStatus(
+      uniqueResults.length
+        ? `Analysis completed: ${uniqueResults.length} finding(s) detected.`
+        : "Analysis completed: no findings matched the enabled local checks."
+    );
+
+    setHistory((previous) =>
+      [
+        {
+          language,
+          time: new Date().toLocaleTimeString(),
+          count: uniqueResults.length,
+        },
+        ...previous,
+      ].slice(0, 5)
+    );
+  }
+
+  function loadSample() {
+    setLanguage("Python");
+    setCode(STARTER_CODE);
+    setStatus("Sample loaded. Click Analyze Code to scan it.");
+    setHasAnalyzed(false);
+    setFindings([]);
+  }
+
+  function clearCode() {
+    setCode("");
+    setFindings([]);
+    setHasAnalyzed(false);
+    setStatus("Editor cleared.");
+  }
 
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #060a10; }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: #0d1117; }
-        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
-        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-        @keyframes scanline {
-          0% { transform: translateY(-100%); }
-          100% { transform: translateY(100vh); }
-        }
-        @keyframes fadeUp {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes glitch {
-          0%,100% { clip-path: none; transform: none; }
-          20% { clip-path: polygon(0 20%,100% 20%,100% 21%,0 21%); transform: translateX(-2px); }
-          40% { clip-path: polygon(0 60%,100% 60%,100% 61%,0 61%); transform: translateX(2px); }
-          60% { clip-path: none; transform: none; }
-        }
-        .analyze-btn {
-          background: linear-gradient(135deg, #238636, #2ea043);
-          border: 1px solid #2ea043;
-          color: #fff;
-          padding: 14px 36px;
-          border-radius: 6px;
-          font-family: 'Syne', sans-serif;
-          font-weight: 700;
-          font-size: 15px;
-          cursor: pointer;
-          transition: all 0.2s;
-          display: flex; align-items: center; gap: 10px;
-          letter-spacing: 0.5px;
-        }
-        .analyze-btn:hover:not(:disabled) {
-          background: linear-gradient(135deg, #2ea043, #3fb950);
-          box-shadow: 0 0 20px rgba(46,160,67,0.4);
-          transform: translateY(-1px);
-        }
-        .analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .tab-btn {
-          background: none; border: none; padding: 10px 20px;
-          font-family: 'Syne', sans-serif; font-weight: 600; font-size: 13px;
-          cursor: pointer; border-radius: 6px; transition: all 0.2s;
-          letter-spacing: 0.5px;
-        }
-        .code-area {
-          width: 100%; background: #0d1117; border: 1px solid #21262d;
-          border-radius: 8px; color: #c9d1d9; font-family: 'Space Mono', monospace;
-          font-size: 13px; line-height: 1.6; padding: 16px; resize: none;
-          outline: none; transition: border-color 0.2s;
-        }
-        .code-area:focus { border-color: #388bfd; box-shadow: 0 0 0 3px rgba(56,139,253,0.12); }
-        .section-card {
-          background: #0d1117; border: 1px solid #21262d;
-          border-radius: 10px; padding: 20px; margin-bottom: 16px;
-          animation: fadeUp 0.4s ease both;
-        }
-        .nav-link { 
-          color: #8b949e; font-family: 'Syne', sans-serif; font-size: 13px;
-          text-decoration: none; font-weight: 600; padding: 6px 12px;
-          border-radius: 6px; transition: all 0.2s; cursor: pointer;
-          background: none; border: none;
-        }
-        .nav-link:hover { color: #c9d1d9; background: #161b22; }
-        .stat-box {
-          background: #161b22; border: 1px solid #21262d; border-radius: 8px;
-          padding: 16px 20px; text-align: center; flex: 1;
-        }
-        .improvement-item {
-          display: flex; align-items: flex-start; gap: 10px;
-          padding: 10px 14px; background: #0d1117;
-          border: 1px solid #21262d; border-radius: 6px; margin-bottom: 8px;
-          font-family: 'Space Mono', monospace; font-size: 12px; color: #8b949e;
-          animation: fadeUp 0.3s ease both;
-        }
-      `}</style>
-
-      <div style={{ minHeight: "100vh", background: "#060a10", color: "#c9d1d9", fontFamily: "'Syne', sans-serif" }}>
-
-        {/* Top Nav */}
-        <nav style={{
-          borderBottom: "1px solid #21262d", background: "rgba(13,17,23,0.95)",
-          backdropFilter: "blur(10px)", position: "sticky", top: 0, zIndex: 100,
-          padding: "0 24px"
-        }}>
-          <div style={{ maxWidth: "1200px", margin: "0 auto", display: "flex", alignItems: "center", height: "60px", gap: "16px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginRight: "16px" }}>
-              <div style={{
-                width: "32px", height: "32px", background: "linear-gradient(135deg, #238636, #58a6ff)",
-                borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "16px"
-              }}>⚡</div>
-              <span style={{ fontWeight: "800", fontSize: "16px", letterSpacing: "-0.3px" }}>
-                CodeSentinel<span style={{ color: "#2ea043" }}>AI</span>
-              </span>
+    <div style={styles.page}>
+      <header style={styles.header}>
+        <div style={styles.brand}>
+          <div style={styles.logo}>CS</div>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>
+              CodeSentinel AI
             </div>
-            <div style={{ display: "flex", gap: "4px" }}>
-              {["Dashboard", "Reviews", "Settings"].map(t => (
-                <button key={t} className="nav-link">{t}</button>
-              ))}
-            </div>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "12px" }}>
-              <div style={{
-                display: "flex", alignItems: "center", gap: "6px",
-                background: "#161b22", border: "1px solid #21262d",
-                padding: "5px 12px", borderRadius: "20px", fontSize: "12px"
-              }}>
-                <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#2ea043", animation: "pulse 2s infinite" }}></span>
-                <span style={{ color: "#8b949e", fontFamily: "'Space Mono', monospace" }}>Gemini 2.5 Flash</span>
-              </div>
-              <div style={{
-                width: "32px", height: "32px", borderRadius: "50%",
-                background: "linear-gradient(135deg, #58a6ff, #bc8cff)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "13px", fontWeight: "700", cursor: "pointer"
-              }}>U</div>
-            </div>
-          </div>
-        </nav>
-
-        {/* Hero Strip */}
-        <div style={{
-          background: "linear-gradient(to right, #0d1117, #161b22, #0d1117)",
-          borderBottom: "1px solid #21262d", padding: "32px 24px"
-        }}>
-          <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "8px" }}>
-              <div style={{
-                background: "#161b22", border: "1px solid #30363d",
-                padding: "6px 14px", borderRadius: "20px", fontSize: "12px",
-                color: "#58a6ff", fontFamily: "'Space Mono', monospace", letterSpacing: "0.5px"
-              }}>v2.5.0 — Gemini Powered</div>
-            </div>
-            <h1 style={{ fontSize: "clamp(24px, 4vw, 38px)", fontWeight: "800", letterSpacing: "-1px", lineHeight: 1.2, marginBottom: "8px" }}>
-              AI Code Reviewer<br />
-              <span style={{ color: "#2ea043" }}>+ Auto Fix System</span>
-            </h1>
-            <p style={{ color: "#8b949e", fontSize: "15px", maxWidth: "520px" }}>
-              Paste your code. Get instant bug analysis, security audit, performance review, and AI-generated fixes.
-            </p>
-
-            {/* Stats Row */}
-            <div style={{ display: "flex", gap: "16px", marginTop: "24px", flexWrap: "wrap" }}>
-              {[
-                { label: "Reviews Today", value: "47", icon: "🔍" },
-                { label: "Bugs Fixed", value: "183", icon: "🐛" },
-                { label: "Security Issues", value: "29", icon: "🔒" },
-                { label: "Avg Quality", value: "7.4", icon: "⭐" },
-              ].map(s => (
-                <div key={s.label} className="stat-box" style={{ minWidth: "120px" }}>
-                  <div style={{ fontSize: "20px", marginBottom: "4px" }}>{s.icon}</div>
-                  <div style={{ fontSize: "22px", fontWeight: "800", color: "#f0f6fc" }}>{s.value}</div>
-                  <div style={{ fontSize: "11px", color: "#6e7681", fontFamily: "'Space Mono', monospace" }}>{s.label}</div>
-                </div>
-              ))}
+            <div style={{ ...styles.muted, fontSize: 12 }}>
+              Code quality and security review
             </div>
           </div>
         </div>
+        <div
+          style={{
+            border: "1px solid #28634b",
+            color: "#86efac",
+            background: "#173126",
+            borderRadius: 20,
+            padding: "7px 12px",
+            fontSize: 12,
+          }}
+        >
+          Local analysis mode
+        </div>
+      </header>
 
-        {/* Main Content */}
-        <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "32px 24px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: "24px" }}>
-
-            {/* LEFT: Editor + Results */}
-            <div>
-              {/* Editor Card */}
-              <div style={{
-                background: "#0d1117", border: "1px solid #21262d",
-                borderRadius: "12px", overflow: "hidden", marginBottom: "24px"
-              }}>
-                {/* Editor Header */}
-                <div style={{
-                  background: "#161b22", borderBottom: "1px solid #21262d",
-                  padding: "12px 16px", display: "flex", alignItems: "center", gap: "12px"
-                }}>
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    {["#ff5f57", "#ffbd2e", "#28c840"].map(c => (
-                      <div key={c} style={{ width: "12px", height: "12px", borderRadius: "50%", background: c }} />
-                    ))}
-                  </div>
-                  <span style={{ color: "#6e7681", fontSize: "13px", fontFamily: "'Space Mono', monospace", flex: 1 }}>
-                    code_input.py
-                  </span>
-                  <span style={{ color: "#6e7681", fontSize: "11px", fontFamily: "'Space Mono', monospace" }}>
-                    {lineCount} lines
-                  </span>
-                </div>
-
-                {/* Line numbers + textarea */}
-                <div style={{ display: "flex" }}>
-                  <div style={{
-                    padding: "16px 10px", background: "#0a0e15",
-                    borderRight: "1px solid #21262d", userSelect: "none",
-                    minWidth: "44px", textAlign: "right"
-                  }}>
-                    {Array.from({ length: lineCount }, (_, i) => (
-                      <div key={i} style={{ color: "#4a5568", fontFamily: "'Space Mono', monospace", fontSize: "13px", lineHeight: "1.6" }}>
-                        {i + 1}
-                      </div>
-                    ))}
-                  </div>
-                  <textarea
-                    className="code-area"
-                    value={code}
-                    onChange={e => setCode(e.target.value)}
-                    rows={Math.max(12, lineCount + 2)}
-                    style={{ borderRadius: 0, border: "none", padding: "16px" }}
-                    placeholder={`# Paste your code here...\ndef example():\n    pass`}
-                    spellCheck={false}
-                  />
-                </div>
-
-                {/* Editor Footer */}
-                <div style={{
-                  background: "#161b22", borderTop: "1px solid #21262d",
-                  padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center"
-                }}>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={() => setCode("")} style={{
-                      background: "none", border: "1px solid #30363d", color: "#8b949e",
-                      padding: "7px 14px", borderRadius: "6px", cursor: "pointer",
-                      fontFamily: "'Syne', sans-serif", fontSize: "13px", fontWeight: "600"
-                    }}>Clear</button>
-                    <button onClick={() => setCode(SAMPLE_CODE)} style={{
-                      background: "none", border: "1px solid #30363d", color: "#8b949e",
-                      padding: "7px 14px", borderRadius: "6px", cursor: "pointer",
-                      fontFamily: "'Syne', sans-serif", fontSize: "13px", fontWeight: "600"
-                    }}>Sample</button>
-                  </div>
-                  <button className="analyze-btn" onClick={handleAnalyze} disabled={loading || !code.trim()}>
-                    {loading ? (
-                      <>
-                        <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: "spin 1s linear infinite" }}>
-                          <circle cx="8" cy="8" r="6" fill="none" stroke="#fff" strokeWidth="2" strokeDasharray="30" strokeLinecap="round" />
-                        </svg>
-                        Analyzing...
-                      </>
-                    ) : (
-                      <><span>⚡</span> Analyze & Fix Code</>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Results */}
-              {result && (
-                <div ref={resultRef}>
-                  {/* Tabs */}
-                  <div style={{
-                    display: "flex", gap: "4px", background: "#0d1117",
-                    border: "1px solid #21262d", borderRadius: "10px 10px 0 0",
-                    padding: "8px", borderBottom: "none"
-                  }}>
-                    {[
-                      { id: "review", label: "📊 Analysis" },
-                      { id: "fixed", label: "✅ Fixed Code" },
-                      { id: "improvements", label: "💡 Improvements" },
-                    ].map(tab => (
-                      <button
-                        key={tab.id}
-                        className="tab-btn"
-                        onClick={() => setActiveTab(tab.id)}
-                        style={{
-                          color: activeTab === tab.id ? "#f0f6fc" : "#8b949e",
-                          background: activeTab === tab.id ? "#161b22" : "none",
-                          border: activeTab === tab.id ? "1px solid #30363d" : "1px solid transparent",
-                        }}
-                      >{tab.label}</button>
-                    ))}
-                  </div>
-
-                  <div style={{
-                    background: "#0d1117", border: "1px solid #21262d",
-                    borderTop: "none", borderRadius: "0 0 10px 10px", padding: "20px"
-                  }}>
-                    {activeTab === "review" && (
-                      <div style={{ animation: "fadeUp 0.3s ease" }}>
-                        {/* Score Cards */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "20px" }}>
-                          {[
-                            { label: "Bugs", score: result.bugs.score, color: "#f85149", items: result.bugs.items },
-                            { label: "Performance", score: result.performance.score, color: "#58a6ff", items: result.performance.items },
-                            { label: "Quality", score: result.quality.score, color: "#bc8cff", items: result.quality.items },
-                          ].map(m => (
-                            <div key={m.label} className="section-card" style={{ textAlign: "center" }}>
-                              <ScoreRing score={m.score} color={m.color} />
-                              <div style={{ fontWeight: "700", fontSize: "14px", marginTop: "8px", color: "#f0f6fc" }}>{m.label}</div>
-                              <div style={{ color: "#6e7681", fontSize: "11px", fontFamily: "'Space Mono', monospace", marginTop: "4px" }}>
-                                {m.items.length} {m.items.length === 1 ? "issue" : "issues"}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Security */}
-                        <div className="section-card" style={{
-                          borderColor: result.security.level === "Critical" ? "#3d1515" : "#21262d"
-                        }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "14px" }}>
-                            <span style={{ fontSize: "18px" }}>🔒</span>
-                            <span style={{ fontWeight: "700", color: "#f0f6fc" }}>Security Audit</span>
-                            <SeverityBadge level={result.security.level} />
-                          </div>
-                          {result.security.items.map((item, i) => (
-                            <div key={i} style={{
-                              display: "flex", gap: "10px", padding: "10px 14px",
-                              background: "#161b22", borderRadius: "6px", marginBottom: "8px",
-                              borderLeft: "3px solid #ef4444", fontSize: "13px", color: "#8b949e"
-                            }}>
-                              <span style={{ color: "#f85149", flexShrink: 0 }}>⚠</span>
-                              <TypewriterText text={item} />
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Bug Details */}
-                        <div className="section-card">
-                          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
-                            <span style={{ fontSize: "18px" }}>🐛</span>
-                            <span style={{ fontWeight: "700", color: "#f0f6fc" }}>Bug Details</span>
-                          </div>
-                          {result.bugs.items.map((item, i) => (
-                            <div key={i} style={{
-                              display: "flex", gap: "10px", padding: "10px 14px",
-                              background: "#161b22", borderRadius: "6px", marginBottom: "8px",
-                              borderLeft: "3px solid #f97316", fontSize: "13px", color: "#8b949e"
-                            }}>
-                              <span style={{ color: "#fdba74", flexShrink: 0 }}>→</span>
-                              <span>{item}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {activeTab === "fixed" && (
-                      <div style={{ animation: "fadeUp 0.3s ease" }}>
-                        <div style={{
-                          display: "flex", justifyContent: "space-between", alignItems: "center",
-                          marginBottom: "14px"
-                        }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                            <span style={{ color: "#2ea043", fontSize: "18px" }}>✓</span>
-                            <span style={{ fontWeight: "700", color: "#f0f6fc" }}>Fixed Code</span>
-                            <span style={{ background: "#1a2d1a", border: "1px solid #22c55e", color: "#86efac", padding: "2px 10px", borderRadius: "4px", fontSize: "11px", fontFamily: "'Space Mono', monospace" }}>AI GENERATED</span>
-                          </div>
-                          <button onClick={copyFixed} style={{
-                            background: copied ? "#238636" : "#161b22",
-                            border: `1px solid ${copied ? "#2ea043" : "#30363d"}`,
-                            color: copied ? "#fff" : "#8b949e",
-                            padding: "7px 14px", borderRadius: "6px", cursor: "pointer",
-                            fontFamily: "'Syne', sans-serif", fontSize: "13px", fontWeight: "600",
-                            transition: "all 0.2s"
-                          }}>{copied ? "✓ Copied!" : "Copy"}</button>
-                        </div>
-                        <pre style={{
-                          background: "#0a0e15", border: "1px solid #21262d", borderRadius: "8px",
-                          padding: "20px", color: "#79c0ff", fontFamily: "'Space Mono', monospace",
-                          fontSize: "13px", lineHeight: "1.7", overflow: "auto", margin: 0
-                        }}>{result.fixedCode}</pre>
-                      </div>
-                    )}
-
-                    {activeTab === "improvements" && (
-                      <div style={{ animation: "fadeUp 0.3s ease" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
-                          <span style={{ fontSize: "18px" }}>💡</span>
-                          <span style={{ fontWeight: "700", color: "#f0f6fc" }}>Recommended Improvements</span>
-                        </div>
-                        {result.improvements.map((item, i) => (
-                          <div key={i} className="improvement-item" style={{ animationDelay: `${i * 60}ms` }}>
-                            <span style={{
-                              background: "#161b22", border: "1px solid #30363d",
-                              color: "#58a6ff", borderRadius: "4px", padding: "2px 7px",
-                              fontSize: "11px", flexShrink: 0, fontWeight: "700"
-                            }}>{String(i + 1).padStart(2, "0")}</span>
-                            <span>{item}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {!result && !loading && (
-                <div style={{
-                  background: "#0d1117", border: "1px dashed #21262d",
-                  borderRadius: "12px", padding: "48px 24px", textAlign: "center"
-                }}>
-                  <div style={{ fontSize: "40px", marginBottom: "16px" }}>🔬</div>
-                  <div style={{ fontWeight: "700", color: "#f0f6fc", fontSize: "18px", marginBottom: "8px" }}>Ready to Analyze</div>
-                  <div style={{ color: "#6e7681", fontSize: "14px" }}>Paste your code above and click <strong style={{ color: "#2ea043" }}>Analyze & Fix Code</strong></div>
-                </div>
-              )}
-            </div>
-
-            {/* RIGHT: Sidebar */}
-            <div>
-              {/* How It Works */}
-              <div className="section-card" style={{ marginBottom: "16px" }}>
-                <div style={{ fontWeight: "700", color: "#f0f6fc", marginBottom: "16px", fontSize: "14px" }}>
-                  ⚙️ How It Works
-                </div>
-                {[
-                  { n: "01", label: "Paste Code", desc: "Any language, any size" },
-                  { n: "02", label: "AI Analysis", desc: "Gemini 2.5 Flash reviews" },
-                  { n: "03", label: "Get Report", desc: "Bugs, security, quality" },
-                  { n: "04", label: "Auto Fix", desc: "Clean corrected code" },
-                ].map((s, i) => (
-                  <div key={i} style={{ display: "flex", gap: "12px", marginBottom: "12px", alignItems: "flex-start" }}>
-                    <span style={{
-                      background: "#161b22", border: "1px solid #30363d",
-                      color: "#58a6ff", borderRadius: "6px", padding: "4px 8px",
-                      fontFamily: "'Space Mono', monospace", fontSize: "11px", fontWeight: "700", flexShrink: 0
-                    }}>{s.n}</span>
-                    <div>
-                      <div style={{ fontWeight: "600", fontSize: "13px", color: "#c9d1d9" }}>{s.label}</div>
-                      <div style={{ color: "#6e7681", fontSize: "12px" }}>{s.desc}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Review History */}
-              <div className="section-card">
-                <div style={{ fontWeight: "700", color: "#f0f6fc", marginBottom: "14px", fontSize: "14px" }}>
-                  📜 Recent Reviews
-                </div>
-                {history.map((item, i) => (
-                  <HistoryItem key={i} item={item} index={i} />
-                ))}
-              </div>
-
-              {/* GitHub PR Box */}
-              <div style={{
-                background: "linear-gradient(135deg, #0d1117, #161b22)",
-                border: "1px solid #30363d", borderRadius: "10px", padding: "20px", marginTop: "16px"
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
-                  <span style={{ fontSize: "20px" }}>🔗</span>
-                  <span style={{ fontWeight: "700", color: "#f0f6fc", fontSize: "14px" }}>GitHub PR Automation</span>
-                </div>
-                <p style={{ color: "#8b949e", fontSize: "13px", lineHeight: "1.6", marginBottom: "14px" }}>
-                  Connect your repository and auto-review every pull request with AI.
-                </p>
-                <button style={{
-                  width: "100%", background: "#161b22", border: "1px solid #30363d",
-                  color: "#c9d1d9", padding: "10px", borderRadius: "6px", cursor: "pointer",
-                  fontFamily: "'Syne', sans-serif", fontWeight: "600", fontSize: "13px"
-                }}>Connect Repository →</button>
-              </div>
-            </div>
+      <main style={styles.container}>
+        <section style={{ marginBottom: 28 }}>
+          <div
+            style={{
+              color: "#67e8f9",
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: 2,
+            }}
+          >
+            CODE REVIEW WORKSPACE
           </div>
+          <h1
+            style={{
+              fontSize: "clamp(28px, 4vw, 42px)",
+              margin: "12px 0",
+            }}
+          >
+            Find issues before they reach production.
+          </h1>
+          <p
+            style={{
+              ...styles.muted,
+              maxWidth: 720,
+              lineHeight: 1.7,
+            }}
+          >
+            Inspect code with local, rule-based checks. Review the evidence,
+            understand potential issues, and use the recommendations to
+            improve your code.
+          </p>
+        </section>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 14,
+            marginBottom: 24,
+          }}
+        >
+          <Metric
+            label="Findings in latest scan"
+            value={hasAnalyzed ? findings.length : "--"}
+            description="Based on the latest analysis"
+          />
+          <Metric
+            label="High-severity findings"
+            value={hasAnalyzed ? highCount : "--"}
+            description="Potentially serious issues detected"
+          />
+          <Metric
+            label="Language"
+            value={language}
+            description="Select the language for this scan"
+          />
         </div>
 
-        {/* Footer */}
-        <footer style={{
-          borderTop: "1px solid #21262d", padding: "20px 24px",
-          display: "flex", justifyContent: "center", alignItems: "center", gap: "24px"
-        }}>
-          <span style={{ color: "#6e7681", fontFamily: "'Space Mono', monospace", fontSize: "11px" }}>
-            CodeSentinel AI — Powered by Gemini 2.5 Flash
-          </span>
+        <section style={styles.panel}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 14,
+              marginBottom: 18,
+            }}
+          >
+            <div>
+              <h2 style={{ margin: "0 0 6px" }}>Code editor</h2>
+              <div style={{ ...styles.muted, fontSize: 13 }}>
+                Paste code below, or load the demonstration sample.
+              </div>
+            </div>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 13,
+              }}
+            >
+              Language
+              <select
+                value={language}
+                onChange={(event) => setLanguage(event.target.value)}
+                style={{
+                  background: "#0b1423",
+                  color: "#e5edf8",
+                  border: "1px solid #34445e",
+                  padding: 9,
+                  borderRadius: 7,
+                }}
+              >
+                <option>Python</option>
+                <option>JavaScript</option>
+                <option>TypeScript</option>
+                <option>Java</option>
+                <option>C</option>
+                <option>C++</option>
+              </select>
+            </label>
+          </div>
+
+          <textarea
+            aria-label="Code editor"
+            spellCheck={false}
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            rows={12}
+            style={styles.input}
+            placeholder="Paste your code here..."
+          />
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 10,
+              marginTop: 15,
+            }}
+          >
+            <button onClick={analyzeCode} style={styles.button}>
+              Analyze Code
+            </button>
+            <button onClick={loadSample} style={styles.secondaryButton}>
+              Load Test Sample
+            </button>
+            <button onClick={clearCode} style={styles.secondaryButton}>
+              Clear Editor
+            </button>
+          </div>
+
+          <p
+            role="status"
+            style={{
+              color: hasAnalyzed ? "#86efac" : "#91a2ba",
+              fontSize: 13,
+              marginBottom: 0,
+            }}
+          >
+            {status}
+          </p>
+        </section>
+
+        <section style={{ ...styles.panel, marginTop: 22 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              borderBottom: "1px solid #293950",
+              paddingBottom: 15,
+              marginBottom: 16,
+            }}
+          >
+            {(
+              [
+                ["analysis", "Analysis Results"],
+                ["findings", "All Findings"],
+                ["improvements", "Recommendations"],
+              ] as [Tab, string][]
+            ).map(([tab, label]) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  ...styles.secondaryButton,
+                  background: activeTab === tab ? "#164e63" : "#1b2940",
+                  borderColor: activeTab === tab ? "#0891b2" : "#34445e",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {!hasAnalyzed ? (
+            <div style={{ padding: "26px 5px", textAlign: "center" }}>
+              <h3>Ready for your first scan</h3>
+              <p style={styles.muted}>
+                Run the analysis to display findings and recommendations here.
+              </p>
+            </div>
+          ) : findings.length === 0 ? (
+            <div
+              style={{
+                padding: 20,
+                background: "#102c36",
+                borderRadius: 9,
+                lineHeight: 1.7,
+              }}
+            >
+              <strong style={{ color: "#a5f3fc" }}>
+                No findings from the enabled checks
+              </strong>
+              <p style={{ marginBottom: 0 }}>
+                This is not proof that the code is bug-free or secure. The
+                current analyzer uses a limited set of local rules.
+              </p>
+            </div>
+          ) : activeTab === "improvements" ? (
+            <div>
+              <h3>Recommended actions</h3>
+              {findings.map((finding) => (
+                <div
+                  key={finding.id}
+                  style={{
+                    padding: 14,
+                    marginTop: 10,
+                    border: "1px solid #293950",
+                    borderRadius: 9,
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <strong>{finding.title}</strong>
+                  <p style={{ marginBottom: 0 }}>
+                    {finding.recommendation}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div>
+              <h3>
+                {activeTab === "findings" ? "All detected findings" : "Scan summary"}
+              </h3>
+              <p style={styles.muted}>
+                {findings.length} finding(s) from the enabled local checks.
+                Review each result before changing your code.
+              </p>
+              {findings.map((finding) => (
+                <FindingCard key={finding.id} finding={finding} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section style={{ ...styles.panel, marginTop: 22 }}>
+          <h2 style={{ marginTop: 0 }}>Recent scans</h2>
+          {history.length === 0 ? (
+            <p style={styles.muted}>Your scan history will appear here during this session.</p>
+          ) : (
+            history.map((item, index) => (
+              <div
+                key={`${item.time}-${index}`}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  padding: "12px 0",
+                  borderBottom:
+                    index < history.length - 1 ? "1px solid #293950" : "none",
+                }}
+              >
+                <span>{item.language} scan</span>
+                <span style={styles.muted}>{item.time}</span>
+                <strong>{item.count} finding(s)</strong>
+              </div>
+            ))
+          )}
+        </section>
+
+        <footer
+          style={{
+            textAlign: "center",
+            padding: "28px 0 8px",
+            ...styles.muted,
+            fontSize: 12,
+            lineHeight: 1.7,
+          }}
+        >
+          CodeSentinel AI | Educational code review prototype
+          <br />
+          Results depend on the implemented rules and do not guarantee security.
         </footer>
-      </div>
-    </>
+      </main>
+    </div>
   );
 }
