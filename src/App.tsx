@@ -1,4 +1,4 @@
-﻿
+
 import { useMemo, useState } from "react";
 import { detectDivisionByZero } from "./analyzer";
 
@@ -117,7 +117,13 @@ function Metric({
   );
 }
 
-function FindingCard({ finding }: { finding: FindingItem }) {
+function FindingCard({
+  finding,
+  onApplyFix,
+}: {
+  finding: FindingItem;
+  onApplyFix: (finding: FindingItem) => void;
+}) {
   const severityColors = {
     HIGH: { text: "#fca5a5", border: "#7f303d", bg: "#351b29" },
     MEDIUM: { text: "#fcd34d", border: "#705b29", bg: "#332b1a" },
@@ -196,6 +202,15 @@ function FindingCard({ finding }: { finding: FindingItem }) {
       >
         <strong>Recommended fix:</strong> {finding.recommendation}
       </div>
+      {finding.ruleId === "BUG-DIV-001" && (
+        <button
+          type="button"
+          onClick={() => onApplyFix(finding)}
+          style={{ ...styles.button, marginTop: 12 }}
+        >
+          Apply Suggested Fix
+        </button>
+      )}
     </div>
   );
 }
@@ -210,6 +225,50 @@ export default function App() {
   const [history, setHistory] = useState<
     { language: string; time: string; count: number }[]
   >([]);
+  function applySuggestedFix(finding: FindingItem) {
+    const match = finding.message.match(
+      /Function "([A-Za-z_]\w*)" divides by parameter "([A-Za-z_]\w*)"/
+    );
+
+    if (!match || language !== "Python") {
+      setStatus("No supported automatic fix is available.");
+      return;
+    }
+
+    const functionName = match[1];
+    const denominator = match[2];
+    const lines = code.split(/\r?\n/);
+    const definitionIndex = lines.findIndex((line) =>
+      new RegExp("^\\s*def\\s+" + functionName + "\\s*\\(").test(line)
+    );
+
+    if (definitionIndex < 0) {
+      setStatus("Could not locate the function. No changes made.");
+      return;
+    }
+
+    const definition = lines[definitionIndex];
+    const indent = definition.match(/^\s*/)?.[0] ?? "";
+    const bodyIndent = indent + "    ";
+    const nextLine = lines[definitionIndex + 1] ?? "";
+
+    if (new RegExp("^\\s*if\\s+" + denominator + "\\s*==\\s*0\\s*:").test(nextLine)) {
+      setStatus("A zero-denominator check already exists.");
+      return;
+    }
+
+    lines.splice(
+      definitionIndex + 1,
+      0,
+      bodyIndent + "if " + denominator + " == 0:",
+      bodyIndent + '    raise ValueError("' + denominator + ' must not be zero")'
+    );
+
+    setCode(lines.join("\n"));
+    setFindings([]);
+    setHasAnalyzed(false);
+    setStatus("Suggested check inserted. Analyze the updated code to verify it.");
+  }
 
   const highCount = useMemo(
     () => findings.filter((item) => item.severity === "HIGH").length,
@@ -640,7 +699,11 @@ export default function App() {
                 Review each result before changing your code.
               </p>
               {findings.map((finding) => (
-                <FindingCard key={finding.id} finding={finding} />
+                <FindingCard
+                  key={finding.id}
+                  finding={finding}
+                  onApplyFix={applySuggestedFix}
+                />
               ))}
             </div>
           )}
