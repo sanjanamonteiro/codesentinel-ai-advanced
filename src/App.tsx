@@ -303,6 +303,58 @@ export default function App() {
       ].slice(0, 5)
     );
   }
+  function downloadReport() {
+    if (!hasAnalyzed) {
+      setStatus("Please analyze your code before downloading a report.");
+      return;
+    }
+
+    const report = [
+      "CODESENTINEL AI — CODE ANALYSIS REPORT",
+      "======================================",
+      `Date: ${new Date().toLocaleString()}`,
+      `Language: ${language}`,
+      `Total findings: ${findings.length}`,
+      `High severity: ${findings.filter((f) => f.severity === "HIGH").length}`,
+      `Medium severity: ${findings.filter((f) => f.severity === "MEDIUM").length}`,
+      `Low severity: ${findings.filter((f) => f.severity === "LOW").length}`,
+      "",
+      "FINDINGS",
+      "--------",
+      ...(
+        findings.length
+          ? findings.flatMap((f, index) => [
+              "",
+              `${index + 1}. ${f.title}`,
+              `Rule ID: ${f.ruleId}`,
+              `Severity: ${f.severity}`,
+              `Line: ${f.line}`,
+              `Details: ${f.message}`,
+              `Evidence: ${f.evidence}`,
+              `Recommendation: ${f.recommendation}`,
+            ])
+          : ["No findings matched the enabled local checks."]
+      ),
+      "",
+      "LIMITATION NOTICE",
+      "-----------------",
+      "This report covers only the local checks enabled in CodeSentinel AI.",
+      "No findings does not guarantee that the code is secure or bug-free.",
+    ].join("\n");
+
+    const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `codesentinel-report-${Date.now()}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setStatus("Analysis report download requested.");
+  }
 
   function loadSample() {
     setLanguage("Python");
@@ -479,6 +531,13 @@ export default function App() {
             </button>
             <button onClick={clearCode} style={styles.secondaryButton}>
               Clear Editor
+            <button
+             onClick={downloadReport}
+             style={styles.secondaryButton}
+             disabled={!hasAnalyzed}
+             >
+             Download Report
+            </button>
             </button>
           </div>
 
