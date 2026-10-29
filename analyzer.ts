@@ -139,3 +139,45 @@ export function detectDivisionByZero(code: string): Finding[] {
       ) === index
   );
 }
+
+export function detectUnreachableCode(code: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = code.split(/\r?\n/);
+  let terminalIndent: number | null = null;
+  let terminalLine = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+
+    if (terminalIndent !== null) {
+      if (indent < terminalIndent) {
+        terminalIndent = null;
+      } else {
+        findings.push({
+          id: `BUG-UNREACH-${i + 1}`,
+          ruleId: "BUG-UNREACH-001",
+          title: "Potential unreachable code",
+          severity: "MEDIUM",
+          line: i + 1,
+          message: `This line may never execute because line ${terminalLine} exits the current function or flow.`,
+          evidence: line.trim(),
+          recommendation:
+            "Move this statement before the return or raise, or remove it if it is unnecessary.",
+        });
+        continue;
+      }
+    }
+
+    if (/^(return\b|raise\b)/.test(trimmed)) {
+      terminalIndent = indent;
+      terminalLine = i + 1;
+    }
+  }
+
+  return findings;
+}
