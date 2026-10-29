@@ -16,9 +16,11 @@ export function detectDivisionByZero(code: string): Finding[] {
   const findings: Finding[] = [];
   const lines = code.split(/\r?\n/);
 
-  // Detect direct division by zero, such as x / 0.
+  // Detect direct division by zero, including negative zero.
+  // Ignore Python comments when checking for division by zero.
   lines.forEach((line, index) => {
-    if (/\/\s*0(?:\.0+)?(?:\s|$|[,)])/.test(line)) {
+    const searchableLine = line.trimStart().startsWith("#") ? "" : line.split("#", 1)[0];
+    if (/\/\s*[-+]?0(?:\.0+)?(?:\s|$|[,)])/.test(searchableLine)) {
       findings.push({
         id: `BUG-DIV-${index + 1}`,
         ruleId: "BUG-DIV-001",
