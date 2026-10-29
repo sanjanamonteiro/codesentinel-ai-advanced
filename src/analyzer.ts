@@ -137,3 +137,119 @@ export function detectDivisionByZero(code: string): Finding[] {
       ) === index
   );
 }
+
+
+export function detectUnreachableCode(code: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = code.split(/\r?\n/);
+  let terminalIndent: number | null = null;
+  let terminalLine = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+
+    if (terminalIndent !== null) {
+      if (indent < terminalIndent) {
+        terminalIndent = null;
+      } else {
+        findings.push({
+          id: `BUG-UNREACH-${i + 1}`,
+          ruleId: "BUG-UNREACH-001",
+          title: "Potential unreachable code",
+          severity: "MEDIUM",
+          line: i + 1,
+          message: `This line may never execute because line ${terminalLine} exits the current function or flow.`,
+          evidence: line.trim(),
+          recommendation:
+            "Move this statement before the return or raise, or remove it if it is unnecessary.",
+        });
+        continue;
+      }
+    }
+
+    if (/^(return\b|raise\b)/.test(trimmed)) {
+      terminalIndent = indent;
+      terminalLine = i + 1;
+    }
+  }
+
+  return findings;
+}
+
+export function detectEmptyExceptionHandling(code: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = code.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+
+    if (/^except(?:\s+[^:]+)?\s*:\s*(?:pass)?\s*(?:#.*)?$/.test(trimmed)) {
+      const nextLine = lines[i + 1]?.trim() ?? "";
+
+      if (trimmed.endsWith(":") && nextLine === "pass") {
+        findings.push({
+          id: `BUG-EXCEPTION-${i + 2}`,
+          ruleId: "BUG-EXCEPTION-001",
+          title: "Empty exception handler",
+          severity: "MEDIUM",
+          line: i + 2,
+          message: "This exception handler silently ignores an error.",
+          evidence: lines[i + 1].trim(),
+          recommendation:
+            "Handle the exception explicitly or log the error instead of silently ignoring it.",
+        });
+      } else if (/\bpass\b/.test(trimmed)) {
+        findings.push({
+          id: `BUG-EXCEPTION-${i + 1}`,
+          ruleId: "BUG-EXCEPTION-001",
+          title: "Empty exception handler",
+          severity: "MEDIUM",
+          line: i + 1,
+          message: "This exception handler silently ignores an error.",
+          evidence: trimmed,
+          recommendation:
+            "Handle the exception explicitly or log the error instead of silently ignoring it.",
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+export function detectRiskyFloatEquality(code: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = code.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    if (
+      /\b(?:float|double)\s*\([^)]*\)\s*==|==\s*(?:float|double)\s*\(/.test(trimmed) ||
+      /\b\d+\.\d+\s*==|==\s*\d+\.\d+/.test(trimmed)
+    ) {
+      findings.push({
+        id: `BUG-FLOAT-EQUALITY-${i + 1}`,
+        ruleId: "BUG-FLOAT-001",
+        title: "Potential risky floating-point equality",
+        severity: "LOW",
+        line: i + 1,
+        message:
+          "Exact equality involving floating-point values may produce unexpected results.",
+        evidence: trimmed,
+        recommendation:
+          "Consider math.isclose() in Python or an appropriate tolerance for your language and use case.",
+      });
+    }
+  }
+
+  return findings;
+}

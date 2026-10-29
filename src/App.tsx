@@ -1,6 +1,6 @@
 
 import { useMemo, useState } from "react";
-import { detectDivisionByZero } from "./analyzer";
+import { detectDivisionByZero, detectUnreachableCode, detectEmptyExceptionHandling, detectRiskyFloatEquality } from "./analyzer";
 
 type Tab = "analysis" | "findings" | "improvements";
 
@@ -287,6 +287,9 @@ export default function App() {
 
     if (language === "Python") {
       results.push(...detectDivisionByZero(code));
+      results.push(...detectUnreachableCode(code));
+      results.push(...detectEmptyExceptionHandling(code));
+      results.push(...detectRiskyFloatEquality(code));
     }
 
     const lines = code.split(/\r?\n/);
@@ -752,5 +755,3 @@ export default function App() {
     </div>
   );
 }
-
-
