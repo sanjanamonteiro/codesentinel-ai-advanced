@@ -1,757 +1,628 @@
 
 import { useMemo, useState } from "react";
-import { detectDivisionByZero, detectUnreachableCode, detectEmptyExceptionHandling, detectRiskyFloatEquality } from "./analyzer";
+import {
+  detectDivisionByZero,
+  detectUnreachableCode,
+  detectEmptyExceptionHandling,
+  detectRiskyFloatEquality,
+} from "./analyzer";
+import type { Finding } from "./analyzer";
+import "./App.css";
 
 type Tab = "analysis" | "findings" | "improvements";
-
-type FindingItem = {
-  id: string;
-  ruleId: string;
-  title: string;
-  severity: "HIGH" | "MEDIUM" | "LOW";
-  line: number;
-  message: string;
-  evidence: string;
-  recommendation: string;
+type Page = "dashboard" | "history" | "settings";
+type Review = {
+  date: string;
+  count: number;
+  high: number;
+  findings: Finding[];
+  language: string;
 };
 
-const SAMPLE_CODE = `def divide(a, b):
-    return a / b
-
-print(divide(10, 0))`;
-
-const STARTER_CODE = `def calculate_average(total, count):
+const SAMPLE_CODE = `def calculate_average(total, count):
     return total / count
 
-print(calculate_average(100, 0))`;
+def check_price(price):
+    if price == 0.1:
+        print("Special price")
 
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background: "#0b1120",
-    color: "#e5edf8",
-    fontFamily: "Inter, Segoe UI, Arial, sans-serif",
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 16,
-    flexWrap: "wrap",
-    padding: "18px 5%",
-    borderBottom: "1px solid #253148",
-    background: "#0f1728",
-  },
-  brand: { display: "flex", alignItems: "center", gap: 12 },
-  logo: {
-    width: 42,
-    height: 42,
-    display: "grid",
-    placeItems: "center",
-    borderRadius: 12,
-    background: "#153d54",
-    border: "1px solid #287e9c",
-    color: "#67e8f9",
-    fontWeight: 800,
-    fontSize: 21,
-  },
-  muted: { color: "#91a2ba" },
-  container: { maxWidth: 1250, margin: "0 auto", padding: "32px 5%" },
-  panel: {
-    background: "#111c2e",
-    border: "1px solid #263750",
-    borderRadius: 14,
-    padding: 22,
-    minWidth: 0,
-  },
-  button: {
-    background: "#0891b2",
-    color: "#ffffff",
-    border: 0,
-    borderRadius: 8,
-    padding: "11px 16px",
-    fontWeight: 700,
-    cursor: "pointer",
-  },
-  secondaryButton: {
-    background: "#1b2940",
-    color: "#dbeafe",
-    border: "1px solid #34445e",
-    borderRadius: 8,
-    padding: "10px 13px",
-    cursor: "pointer",
-  },
-  input: {
-    width: "100%",
-    boxSizing: "border-box",
-    background: "#080f1c",
-    color: "#dbeafe",
-    border: "1px solid #2a3b54",
-    borderRadius: 9,
-    padding: 15,
-    fontFamily: "Consolas, Monaco, monospace",
-    fontSize: 14,
-    lineHeight: 1.65,
-    resize: "vertical",
-  },
-  label: { fontSize: 13, fontWeight: 700, color: "#b8c7dc" },
+def process_data(items):
+    try:
+        result = items[0]
+    except:
+        pass
+
+    return result
+    print("This code cannot execute")
+
+result = calculate_average(100, 0)
+`;
+
+const DEFAULT_SETTINGS = {
+  darkMode: true,
+  fontSize: 14,
+  defaultLanguage: "Python",
+  notifications: true,
 };
 
-function Metric({
-  label,
-  value,
-  description,
-}: {
-  label: string;
-  value: string | number;
-  description: string;
-}) {
-  return (
-    <div style={styles.panel}>
-      <div style={styles.muted}>{label}</div>
-      <div style={{ fontSize: 30, fontWeight: 800, margin: "10px 0" }}>
-        {value}
-      </div>
-      <div style={{ ...styles.muted, fontSize: 12 }}>{description}</div>
-    </div>
-  );
-}
+const extraChecks = (code: string): Finding[] => {
+  const findings: Finding[] = [];
 
-function FindingCard({
-  finding,
-  onApplyFix,
-}: {
-  finding: FindingItem;
-  onApplyFix: (finding: FindingItem) => void;
-}) {
-  const severityColors = {
-    HIGH: { text: "#fca5a5", border: "#7f303d", bg: "#351b29" },
-    MEDIUM: { text: "#fcd34d", border: "#705b29", bg: "#332b1a" },
-    LOW: { text: "#86efac", border: "#28634b", bg: "#173126" },
-  };
+  code.split(/\r?\n/).forEach((line, index) => {
+    const checks = [
+      {
+        pattern: /\beval\s*\(/,
+        id: "SEC-EVAL",
+        ruleId: "SEC-EVAL-001",
+        title: "Use of eval()",
+        severity: "HIGH" as const,
+        message: "eval() can execute dynamically supplied code.",
+        recommendation: "Avoid eval() and use safer alternatives.",
+      },
+      {
+        pattern: /\bTODO\b|\bFIXME\b/i,
+        id: "QUALITY-TODO",
+        ruleId: "QUALITY-TODO-001",
+        title: "Unresolved TODO/FIXME",
+        severity: "LOW" as const,
+        message: "This line contains an unfinished task marker.",
+        recommendation: "Resolve or document this task before release.",
+      },
+      {
+        pattern: /console\.log\s*\(/,
+        id: "QUALITY-LOG",
+        ruleId: "QUALITY-LOG-001",
+        title: "Console logging",
+        severity: "LOW" as const,
+        message: "Debug logging may have been left in the code.",
+        recommendation: "Remove unnecessary debug logs before production.",
+      },
+    ];
 
-  const color = severityColors[finding.severity];
-
-  return (
-    <div
-      style={{
-        background: "#0b1423",
-        border: "1px solid #293950",
-        borderRadius: 11,
-        padding: 17,
-        marginTop: 12,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        <strong>{finding.title}</strong>
-        <span
-          style={{
-            color: color.text,
-            background: color.bg,
-            border: `1px solid ${color.border}`,
-            padding: "4px 8px",
-            borderRadius: 5,
-            fontSize: 11,
-            fontWeight: 800,
-          }}
-        >
-          {finding.severity}
-        </span>
-      </div>
-
-      <p style={{ ...styles.muted, fontSize: 12 }}>
-        {finding.ruleId} | Line {finding.line}
-      </p>
-
-      <p style={{ lineHeight: 1.6 }}>{finding.message}</p>
-
-      <div style={{ marginTop: 12 }}>
-        <div style={styles.label}>Evidence</div>
-        <pre
-          style={{
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-            background: "#070d17",
-            borderRadius: 7,
-            padding: 12,
-            color: "#c4d5eb",
-            fontSize: 12,
-          }}
-        >
-          {finding.evidence}
-        </pre>
-      </div>
-
-      <div
-        style={{
-          marginTop: 12,
-          padding: 12,
-          borderRadius: 7,
-          background: "#102c36",
-          color: "#a5f3fc",
-          lineHeight: 1.6,
-        }}
-      >
-        <strong>Recommended fix:</strong> {finding.recommendation}
-      </div>
-      {finding.ruleId === "BUG-DIV-001" && (
-        <button
-          type="button"
-          onClick={() => onApplyFix(finding)}
-          style={{ ...styles.button, marginTop: 12 }}
-        >
-          Apply Suggested Fix
-        </button>
-      )}
-    </div>
-  );
-}
-
-export default function App() {
-  const [code, setCode] = useState(SAMPLE_CODE);
-  const [language, setLanguage] = useState("Python");
-  const [activeTab, setActiveTab] = useState<Tab>("analysis");
-  const [findings, setFindings] = useState<FindingItem[]>([]);
-  const [hasAnalyzed, setHasAnalyzed] = useState(false);
-  const [status, setStatus] = useState("Ready to analyze");
-  const [history, setHistory] = useState<
-    { language: string; time: string; count: number }[]
-  >([]);
-  function applySuggestedFix(finding: FindingItem) {
-    const match = finding.message.match(
-      /Function "([A-Za-z_]\w*)" divides by parameter "([A-Za-z_]\w*)"/
-    );
-
-    if (!match || language !== "Python") {
-      setStatus("No supported automatic fix is available.");
-      return;
-    }
-
-    const functionName = match[1];
-    const denominator = match[2];
-    const lines = code.split(/\r?\n/);
-    const definitionIndex = lines.findIndex((line) =>
-      new RegExp("^\\s*def\\s+" + functionName + "\\s*\\(").test(line)
-    );
-
-    if (definitionIndex < 0) {
-      setStatus("Could not locate the function. No changes made.");
-      return;
-    }
-
-    const definition = lines[definitionIndex];
-    const indent = definition.match(/^\s*/)?.[0] ?? "";
-    const bodyIndent = indent + "    ";
-    const nextLine = lines[definitionIndex + 1] ?? "";
-
-    if (new RegExp("^\\s*if\\s+" + denominator + "\\s*==\\s*0\\s*:").test(nextLine)) {
-      setStatus("A zero-denominator check already exists.");
-      return;
-    }
-
-    lines.splice(
-      definitionIndex + 1,
-      0,
-      bodyIndent + "if " + denominator + " == 0:",
-      bodyIndent + '    raise ValueError("' + denominator + ' must not be zero")'
-    );
-
-    setCode(lines.join("\n"));
-    setFindings([]);
-    setHasAnalyzed(false);
-    setStatus("Suggested check inserted. Analyze the updated code to verify it.");
-  }
-
-  const highCount = useMemo(
-    () => findings.filter((item) => item.severity === "HIGH").length,
-    [findings]
-  );
-
-  function analyzeCode() {
-    if (!code.trim()) {
-      setStatus("Please enter code before starting the analysis.");
-      setFindings([]);
-      setHasAnalyzed(false);
-      return;
-    }
-
-    const results: FindingItem[] = [];
-
-    if (language === "Python") {
-      results.push(...detectDivisionByZero(code));
-      results.push(...detectUnreachableCode(code));
-      results.push(...detectEmptyExceptionHandling(code));
-      results.push(...detectRiskyFloatEquality(code));
-    }
-
-    const lines = code.split(/\r?\n/);
-
-    lines.forEach((line, index) => {
-      if (/\beval\s*\(/.test(line)) {
-        results.push({
-          id: `eval-${index + 1}`,
-          ruleId: "SEC-EVAL-001",
-          title: "Use of eval",
-          severity: "HIGH",
+    checks.forEach((check) => {
+      if (check.pattern.test(line)) {
+        findings.push({
+          id: `${check.id}-${index + 1}`,
+          ruleId: check.ruleId,
+          title: check.title,
+          severity: check.severity,
           line: index + 1,
-          message:
-            "eval can execute dynamically supplied expressions and may be dangerous with untrusted input.",
+          message: check.message,
           evidence: line.trim(),
-          recommendation:
-            "Avoid eval where possible. Use a safe parser or explicitly validate permitted inputs.",
-        });
-      }
-
-      if (/\bTODO\b|\bFIXME\b/.test(line)) {
-        results.push({
-          id: `todo-${index + 1}`,
-          ruleId: "MAINT-TODO-001",
-          title: "Unfinished code marker",
-          severity: "LOW",
-          line: index + 1,
-          message: "This line contains a TODO or FIXME marker.",
-          evidence: line.trim(),
-          recommendation:
-            "Review this marker and complete or document the outstanding work.",
-        });
-      }
-
-      if (/\bconsole\.log\s*\(/.test(line)) {
-        results.push({
-          id: `log-${index + 1}`,
-          ruleId: "QUAL-LOG-001",
-          title: "Debug logging detected",
-          severity: "LOW",
-          line: index + 1,
-          message:
-            "Console logging may expose unnecessary information or clutter production output.",
-          evidence: line.trim(),
-          recommendation:
-            "Remove unnecessary debug statements or use a controlled logging system.",
+          recommendation: check.recommendation,
         });
       }
     });
+  });
 
-    const uniqueResults = results.filter(
-      (item, index, all) =>
-        all.findIndex((other) => other.id === item.id) === index
-    );
+  return findings;
+};
 
-    setFindings(uniqueResults);
-    setHasAnalyzed(true);
-    setActiveTab("analysis");
-    setStatus(
-      uniqueResults.length
-        ? `Analysis completed: ${uniqueResults.length} finding(s) detected.`
-        : "Analysis completed: no findings matched the enabled local checks."
-    );
+function App() {
+  const [code, setCode] = useState(SAMPLE_CODE);
+  const [language, setLanguage] = useState(DEFAULT_SETTINGS.defaultLanguage);
+  const [tab, setTab] = useState<Tab>("analysis");
+  const [page, setPage] = useState<Page>("dashboard");
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [history, setHistory] = useState<Review[]>([]);
+  const [analyzed, setAnalyzed] = useState(false);
+  const [status, setStatus] = useState("Ready to analyze");
 
-    setHistory((previous) =>
-      [
-        {
-          language,
-          time: new Date().toLocaleTimeString(),
-          count: uniqueResults.length,
-        },
-        ...previous,
-      ].slice(0, 5)
-    );
+  const [darkMode, setDarkMode] = useState(() => {
+    return localStorage.getItem("cs-dark-mode") !== "false";
+  });
+  const [fontSize, setFontSize] = useState(() => {
+    return Number(localStorage.getItem("cs-font-size")) || 14;
+  });
+  const [defaultLanguage, setDefaultLanguage] = useState(() => {
+    return localStorage.getItem("cs-language") || "Python";
+  });
+  const [notifications, setNotifications] = useState(() => {
+    return localStorage.getItem("cs-notifications") !== "false";
+  });
+
+  const high = useMemo(
+    () => findings.filter((f) => f.severity === "HIGH").length,
+    [findings]
+  );
+  const medium = findings.filter((f) => f.severity === "MEDIUM").length;
+  const low = findings.filter((f) => f.severity === "LOW").length;
+  const score = Math.max(0, 100 - high * 20 - medium * 10 - low * 4);
+
+  function saveSetting(key: string, value: string) {
+    localStorage.setItem(key, value);
   }
-  function downloadReport() {
-    if (!hasAnalyzed) {
-      setStatus("Please analyze your code before downloading a report.");
+
+  function changeTheme(value: boolean) {
+    setDarkMode(value);
+    saveSetting("cs-dark-mode", String(value));
+  }
+
+  function changeFontSize(value: number) {
+    setFontSize(value);
+    saveSetting("cs-font-size", String(value));
+  }
+
+  function changeDefaultLanguage(value: string) {
+    setDefaultLanguage(value);
+    saveSetting("cs-language", value);
+    setLanguage(value);
+  }
+
+  function changeNotifications(value: boolean) {
+    setNotifications(value);
+    saveSetting("cs-notifications", String(value));
+    setStatus(value ? "Notification preference enabled." : "Notification preference disabled.");
+  }
+
+  function analyze() {
+    if (!code.trim()) {
+      setStatus("Please enter code before analyzing.");
       return;
     }
 
+    setStatus("Analyzing code...");
+
+    const results: Finding[] = [];
+
+    if (language === "Python") {
+      results.push(
+        ...detectDivisionByZero(code),
+        ...detectUnreachableCode(code),
+        ...detectEmptyExceptionHandling(code),
+        ...detectRiskyFloatEquality(code)
+      );
+    }
+
+    results.push(...extraChecks(code));
+
+    const unique = results.filter(
+      (item, index, all) =>
+        all.findIndex(
+          (other) =>
+            other.ruleId === item.ruleId &&
+            other.line === item.line &&
+            other.message === item.message
+        ) === index
+    );
+
+    setFindings(unique);
+    setAnalyzed(true);
+    setTab("analysis");
+    setStatus("Analysis completed");
+
+    setHistory((previous) => [
+      {
+        date: new Date().toLocaleString(),
+        count: unique.length,
+        high: unique.filter((f) => f.severity === "HIGH").length,
+        findings: unique,
+        language,
+      },
+      ...previous,
+    ].slice(0, 20));
+  }
+
+  function downloadReport() {
+    if (!analyzed) return;
+
     const report = [
       "CODESENTINEL AI — CODE ANALYSIS REPORT",
-      "======================================",
       `Date: ${new Date().toLocaleString()}`,
       `Language: ${language}`,
+      `Risk score: ${score}/100`,
       `Total findings: ${findings.length}`,
-      `High severity: ${findings.filter((f) => f.severity === "HIGH").length}`,
-      `Medium severity: ${findings.filter((f) => f.severity === "MEDIUM").length}`,
-      `Low severity: ${findings.filter((f) => f.severity === "LOW").length}`,
       "",
-      "FINDINGS",
-      "--------",
-      ...(
-        findings.length
-          ? findings.flatMap((f, index) => [
-              "",
-              `${index + 1}. ${f.title}`,
-              `Rule ID: ${f.ruleId}`,
-              `Severity: ${f.severity}`,
-              `Line: ${f.line}`,
-              `Details: ${f.message}`,
-              `Evidence: ${f.evidence}`,
-              `Recommendation: ${f.recommendation}`,
-            ])
-          : ["No findings matched the enabled local checks."]
-      ),
-      "",
-      "LIMITATION NOTICE",
-      "-----------------",
-      "This report covers only the local checks enabled in CodeSentinel AI.",
-      "No findings does not guarantee that the code is secure or bug-free.",
+      ...findings.flatMap((f) => [
+        `[${f.severity}] ${f.title}`,
+        `Rule: ${f.ruleId}`,
+        `Line: ${f.line}`,
+        `Message: ${f.message}`,
+        `Evidence: ${f.evidence}`,
+        `Recommendation: ${f.recommendation}`,
+        "",
+      ]),
+      "Note: Results are produced by local rule-based checks, not a guarantee of security.",
     ].join("\n");
 
-    const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([report], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = url;
-    link.download = `codesentinel-report-${Date.now()}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "codesentinel-report.txt";
+    anchor.click();
     URL.revokeObjectURL(url);
-
-    setStatus("Analysis report download requested.");
   }
 
-  function loadSample() {
-    setLanguage("Python");
-    setCode(STARTER_CODE);
-    setStatus("Sample loaded. Click Analyze Code to scan it.");
-    setHasAnalyzed(false);
+  function applyFix(finding: Finding) {
+    if (finding.ruleId !== "BUG-DIV-001" || language !== "Python") return;
+
+    const lines = code.split(/\r?\n/);
+    const target = finding.line - 1;
+    const line = lines[target];
+
+    if (!line) return;
+
+    const indent = line.match(/^\s*/)?.[0] ?? "";
+    const match = line.match(/return\s+(.+?)\s*\/\s*(\w+)/);
+
+    if (!match) {
+      setStatus("Automatic fix unavailable for this expression.");
+      return;
+    }
+
+    const denominator = match[2];
+
+    lines.splice(
+      target,
+      0,
+      `${indent}if ${denominator} == 0:`,
+      `${indent}    return 0`
+    );
+
+    setCode(lines.join("\n"));
+    setAnalyzed(false);
     setFindings([]);
+    setStatus("Suggested guard added. Analyze again to verify.");
   }
 
-  function clearCode() {
-    setCode("");
-    setFindings([]);
-    setHasAnalyzed(false);
-    setStatus("Editor cleared.");
+  function openHistoryItem(item: Review) {
+    setFindings(item.findings);
+    setLanguage(item.language);
+    setAnalyzed(true);
+    setTab("analysis");
+    setStatus("Viewing a previous analysis");
+    setPage("dashboard");
+  }
+
+  function resetSettings() {
+    changeTheme(DEFAULT_SETTINGS.darkMode);
+    changeFontSize(DEFAULT_SETTINGS.fontSize);
+    changeDefaultLanguage(DEFAULT_SETTINGS.defaultLanguage);
+    changeNotifications(DEFAULT_SETTINGS.notifications);
+    setStatus("Settings restored to defaults.");
+  }
+
+  function clearHistory() {
+    setHistory([]);
+    setStatus("Review history cleared.");
   }
 
   return (
-    <div style={styles.page}>
-      <header style={styles.header}>
-        <div style={styles.brand}>
-          <div style={styles.logo}>CS</div>
+    <div className={`app-shell ${darkMode ? "dark-theme" : "light-theme"}`}>
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-icon">✦</div>
           <div>
-            <div style={{ fontSize: 20, fontWeight: 800 }}>
-              CodeSentinel AI
-            </div>
-            <div style={{ ...styles.muted, fontSize: 12 }}>
-              Code quality and security review
-            </div>
+            <strong>CodeSentinel</strong>
+            <small>AI CODE REVIEWER</small>
           </div>
         </div>
-        <div
-          style={{
-            border: "1px solid #28634b",
-            color: "#86efac",
-            background: "#173126",
-            borderRadius: 20,
-            padding: "7px 12px",
-            fontSize: 12,
-          }}
-        >
-          Local analysis mode
+
+        <div className="side-label">WORKSPACE</div>
+
+        <button className={`nav-item ${page === "dashboard" ? "active" : ""}`} onClick={() => setPage("dashboard")}>
+          ▦ <span>Dashboard</span>
+        </button>
+        <button className={`nav-item ${page === "history" ? "active" : ""}`} onClick={() => setPage("history")}>
+          ◷ <span>Review History</span>
+        </button>
+        <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => setPage("settings")}>
+          ⚙ <span>Settings</span>
+        </button>
+
+        <div className="sidebar-bottom">
+          <div className="status-dot" />
+          <span>Local analysis engine</span>
+          <small>ACTIVE</small>
         </div>
-      </header>
+      </aside>
 
-      <main style={styles.container}>
-        <section style={{ marginBottom: 28 }}>
-          <div
-            style={{
-              color: "#67e8f9",
-              fontSize: 12,
-              fontWeight: 800,
-              letterSpacing: 2,
-            }}
-          >
-            CODE REVIEW WORKSPACE
-          </div>
-          <h1
-            style={{
-              fontSize: "clamp(28px, 4vw, 42px)",
-              margin: "12px 0",
-            }}
-          >
-            Find issues before they reach production.
-          </h1>
-          <p
-            style={{
-              ...styles.muted,
-              maxWidth: 720,
-              lineHeight: 1.7,
-            }}
-          >
-            Inspect code with local, rule-based checks. Review the evidence,
-            understand potential issues, and use the recommendations to
-            improve your code.
-          </p>
-        </section>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 14,
-            marginBottom: 24,
-          }}
-        >
-          <Metric
-            label="Findings in latest scan"
-            value={hasAnalyzed ? findings.length : "--"}
-            description="Based on the latest analysis"
-          />
-          <Metric
-            label="High-severity findings"
-            value={hasAnalyzed ? highCount : "--"}
-            description="Potentially serious issues detected"
-          />
-          <Metric
-            label="Language"
-            value={language}
-            description="Select the language for this scan"
-          />
-        </div>
-
-        <section style={styles.panel}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: 14,
-              marginBottom: 18,
-            }}
-          >
-            <div>
-              <h2 style={{ margin: "0 0 6px" }}>Code editor</h2>
-              <div style={{ ...styles.muted, fontSize: 13 }}>
-                Paste code below, or load the demonstration sample.
+      <main className="main-content">
+        {page === "dashboard" && (
+          <>
+            <header className="topbar">
+              <div>
+                <span className="eyebrow">DEVELOPER WORKSPACE / OVERVIEW</span>
+                <h1>Code Review Dashboard</h1>
               </div>
-            </div>
+              <div className="top-status"><span /> SYSTEM OPERATIONAL</div>
+            </header>
 
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 13,
-              }}
-            >
-              Language
-              <select
-                value={language}
-                onChange={(event) => setLanguage(event.target.value)}
-                style={{
-                  background: "#0b1423",
-                  color: "#e5edf8",
-                  border: "1px solid #34445e",
-                  padding: 9,
-                  borderRadius: 7,
-                }}
-              >
-                <option>Python</option>
-                <option>JavaScript</option>
-                <option>TypeScript</option>
-                <option>Java</option>
-                <option>C</option>
-                <option>C++</option>
-              </select>
-            </label>
-          </div>
+            <section className="welcome">
+              <div>
+                <span className="eyebrow">INTELLIGENT CODE INSPECTION</span>
+                <h2>Write better code.<br /><span>Ship with confidence.</span></h2>
+                <p>Inspect your source code for potential bugs, risky patterns and quality issues.</p>
+              </div>
+              <div className="welcome-symbol">⌘</div>
+            </section>
 
-          <textarea
-            aria-label="Code editor"
-            spellCheck={false}
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
-            rows={12}
-            style={styles.input}
-            placeholder="Paste your code here..."
-          />
+            <section className="metrics">
+              <div className="metric-card purple">
+                <span>CODE QUALITY SCORE</span>
+                <strong>{analyzed ? score : "—"}<small>/100</small></strong>
+                <p>{analyzed ? "Based on detected findings" : "Run an analysis to calculate"}</p>
+              </div>
+              <div className="metric-card red">
+                <span>HIGH SEVERITY</span>
+                <strong>{analyzed ? high : "—"}</strong>
+                <p>Critical issues to review</p>
+              </div>
+              <div className="metric-card orange">
+                <span>MEDIUM SEVERITY</span>
+                <strong>{analyzed ? medium : "—"}</strong>
+                <p>Potential code problems</p>
+              </div>
+              <div className="metric-card green">
+                <span>TOTAL FINDINGS</span>
+                <strong>{analyzed ? findings.length : "—"}</strong>
+                <p>Across enabled checks</p>
+              </div>
+            </section>
 
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 10,
-              marginTop: 15,
-            }}
-          >
-            <button onClick={analyzeCode} style={styles.button}>
-              Analyze Code
-            </button>
-            <button onClick={loadSample} style={styles.secondaryButton}>
-              Load Test Sample
-            </button>
-            <button onClick={clearCode} style={styles.secondaryButton}>
-              Clear Editor
-            <button
-             onClick={downloadReport}
-             style={styles.secondaryButton}
-             disabled={!hasAnalyzed}
-             >
-             Download Report
-            </button>
-            </button>
-          </div>
-
-          <p
-            role="status"
-            style={{
-              color: hasAnalyzed ? "#86efac" : "#91a2ba",
-              fontSize: 13,
-              marginBottom: 0,
-            }}
-          >
-            {status}
-          </p>
-        </section>
-
-        <section style={{ ...styles.panel, marginTop: 22 }}>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-              borderBottom: "1px solid #293950",
-              paddingBottom: 15,
-              marginBottom: 16,
-            }}
-          >
-            {(
-              [
-                ["analysis", "Analysis Results"],
-                ["findings", "All Findings"],
-                ["improvements", "Recommendations"],
-              ] as [Tab, string][]
-            ).map(([tab, label]) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  ...styles.secondaryButton,
-                  background: activeTab === tab ? "#164e63" : "#1b2940",
-                  borderColor: activeTab === tab ? "#0891b2" : "#34445e",
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {!hasAnalyzed ? (
-            <div style={{ padding: "26px 5px", textAlign: "center" }}>
-              <h3>Ready for your first scan</h3>
-              <p style={styles.muted}>
-                Run the analysis to display findings and recommendations here.
-              </p>
-            </div>
-          ) : findings.length === 0 ? (
-            <div
-              style={{
-                padding: 20,
-                background: "#102c36",
-                borderRadius: 9,
-                lineHeight: 1.7,
-              }}
-            >
-              <strong style={{ color: "#a5f3fc" }}>
-                No findings from the enabled checks
-              </strong>
-              <p style={{ marginBottom: 0 }}>
-                This is not proof that the code is bug-free or secure. The
-                current analyzer uses a limited set of local rules.
-              </p>
-            </div>
-          ) : activeTab === "improvements" ? (
-            <div>
-              <h3>Recommended actions</h3>
-              {findings.map((finding) => (
-                <div
-                  key={finding.id}
-                  style={{
-                    padding: 14,
-                    marginTop: 10,
-                    border: "1px solid #293950",
-                    borderRadius: 9,
-                    lineHeight: 1.7,
-                  }}
-                >
-                  <strong>{finding.title}</strong>
-                  <p style={{ marginBottom: 0 }}>
-                    {finding.recommendation}
-                  </p>
+            <section className="workspace">
+              <div className="panel editor-panel">
+                <div className="panel-heading">
+                  <div><span className="live-dot" /> CODE EDITOR</div>
+                  <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                    <option>Python</option>
+                    <option>JavaScript</option>
+                    <option>TypeScript</option>
+                    <option>Java</option>
+                    <option>C</option>
+                    <option>C++</option>
+                  </select>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div>
-              <h3>
-                {activeTab === "findings" ? "All detected findings" : "Scan summary"}
-              </h3>
-              <p style={styles.muted}>
-                {findings.length} finding(s) from the enabled local checks.
-                Review each result before changing your code.
-              </p>
-              {findings.map((finding) => (
-                <FindingCard
-                  key={finding.id}
-                  finding={finding}
-                  onApplyFix={applySuggestedFix}
+
+                <div className="editor-toolbar">
+                  <span>● ● ●</span>
+                  <span>main.{language === "Python" ? "py" : language.toLowerCase()}</span>
+                  <span>{code.split("\n").length} lines</span>
+                </div>
+
+                <textarea
+                  className="code-editor"
+                  spellCheck={false}
+                  value={code}
+                  style={{ fontSize: `${fontSize}px` }}
+                  onChange={(e) => setCode(e.target.value)}
+                  aria-label="Source code editor"
                 />
-              ))}
-            </div>
-          )}
-        </section>
 
-        <section style={{ ...styles.panel, marginTop: 22 }}>
-          <h2 style={{ marginTop: 0 }}>Recent scans</h2>
-          {history.length === 0 ? (
-            <p style={styles.muted}>Your scan history will appear here during this session.</p>
-          ) : (
-            history.map((item, index) => (
-              <div
-                key={`${item.time}-${index}`}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  padding: "12px 0",
-                  borderBottom:
-                    index < history.length - 1 ? "1px solid #293950" : "none",
-                }}
-              >
-                <span>{item.language} scan</span>
-                <span style={styles.muted}>{item.time}</span>
-                <strong>{item.count} finding(s)</strong>
+                <div className="editor-actions">
+                  <button className="button primary" onClick={analyze}>✦ Analyze Code</button>
+                  <button className="button secondary" onClick={() => setCode(SAMPLE_CODE)}>Load Sample</button>
+                  <button className="button secondary" onClick={() => { setCode(""); setFindings([]); setAnalyzed(false); }}>Clear</button>
+                  <button className="button secondary" onClick={downloadReport} disabled={!analyzed}>↓ Report</button>
+                </div>
+                <div className="status-line">{status}</div>
               </div>
-            ))
-          )}
-        </section>
 
-        <footer
-          style={{
-            textAlign: "center",
-            padding: "28px 0 8px",
-            ...styles.muted,
-            fontSize: 12,
-            lineHeight: 1.7,
-          }}
-        >
-          CodeSentinel AI | Educational code review prototype
-          <br />
-          Results depend on the implemented rules and do not guarantee security.
-        </footer>
+              <div className="panel results-panel">
+                <div className="panel-heading">
+                  <div>◈ ANALYSIS RESULTS</div>
+                  <span className="result-count">{analyzed ? `${findings.length} FOUND` : "AWAITING SCAN"}</span>
+                </div>
+
+                <div className="tabs">
+                  <button className={tab === "analysis" ? "selected" : ""} onClick={() => setTab("analysis")}>Overview</button>
+                  <button className={tab === "findings" ? "selected" : ""} onClick={() => setTab("findings")}>All Findings</button>
+                  <button className={tab === "improvements" ? "selected" : ""} onClick={() => setTab("improvements")}>Improvements</button>
+                </div>
+
+                {!analyzed ? (
+                  <div className="empty-state">
+                    <div>⌕</div>
+                    <h3>Ready when you are</h3>
+                    <p>Run an analysis to see bugs, security warnings and code recommendations here.</p>
+                  </div>
+                ) : tab === "improvements" ? (
+                  <div className="improvement-list">
+                    {findings.length === 0 ? (
+                      <p>No recommendations. No issues were detected by the enabled checks.</p>
+                    ) : findings.map((f) => (
+                      <div className="improvement" key={f.id}>
+                        <strong>{f.title}</strong>
+                        <p>{f.recommendation}</p>
+                        <small>LINE {f.line} · {f.ruleId}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="finding-list">
+                    {findings.length === 0 ? (
+                      <div className="empty-state compact">
+                        <div>✓</div><h3>No issues detected</h3>
+                        <p>Local checks did not find matching risk patterns.</p>
+                      </div>
+                    ) : (tab === "findings" ? findings : findings.slice(0, 4)).map((f) => (
+                      <article className="finding-card" key={f.id}>
+                        <div className="finding-top">
+                          <span className={`severity ${f.severity.toLowerCase()}`}>{f.severity}</span>
+                          <span className="finding-line">LINE {f.line}</span>
+                        </div>
+                        <h3>{f.title}</h3>
+                        <p>{f.message}</p>
+                        <code>{f.evidence}</code>
+                        <div className="recommendation">
+                          <strong>RECOMMENDATION</strong>
+                          <p>{f.recommendation}</p>
+                        </div>
+                        {f.ruleId === "BUG-DIV-001" && language === "Python" && (
+                          <button className="fix-button" onClick={() => applyFix(f)}>Apply suggested guard</button>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="bottom-grid">
+              <div className="panel bottom-panel">
+                <div className="panel-heading">◷ RECENT REVIEWS</div>
+                {history.length === 0 ? <p className="muted">Your recent scans will appear here.</p> :
+                  history.slice(0, 5).map((item, index) => (
+                    <div className="history-row" key={`${item.date}-${index}`}>
+                      <span className="history-icon">⌁</span>
+                      <span>Local code analysis<small>{item.date}</small></span>
+                      <strong>{item.count} findings</strong>
+                    </div>
+                  ))}
+              </div>
+              <div className="panel bottom-panel how-panel">
+                <div className="panel-heading">✧ HOW IT WORKS</div>
+                <p><b>01</b> Paste your source code into the editor.</p>
+                <p><b>02</b> Run the available local detection rules.</p>
+                <p><b>03</b> Review evidence and recommendations.</p>
+                <p><b>04</b> Download a report for your records.</p>
+              </div>
+            </section>
+
+            <footer>CodeSentinel AI <span>·</span> Local rule-based code analysis · Review findings before applying changes</footer>
+          </>
+        )}
+
+        {page === "history" && (
+          <>
+            <header className="topbar">
+              <div>
+                <span className="eyebrow">DEVELOPER WORKSPACE / RECORDS</span>
+                <h1>Review History</h1>
+              </div>
+              <div className="top-status"><span /> LOCAL HISTORY</div>
+            </header>
+
+            <section className="panel page-panel">
+              <div className="panel-heading">
+                <div>◷ PREVIOUS ANALYSES</div>
+                <span className="result-count">{history.length} REVIEWS</span>
+              </div>
+
+              {history.length === 0 ? (
+                <div className="empty-state">
+                  <div>◷</div>
+                  <h3>No review history yet</h3>
+                  <p>Your completed code analyses will appear here.</p>
+                  <button className="button primary" onClick={() => setPage("dashboard")}>Go to Dashboard</button>
+                </div>
+              ) : (
+                <div className="finding-list">
+                  {history.map((item, index) => (
+                    <div className="history-row" key={`${item.date}-${index}`}>
+                      <span className="history-icon">⌁</span>
+                      <span>
+                        Code analysis · {item.language}
+                        <small>{item.date}</small>
+                      </span>
+                      <strong>{item.count} findings · {item.high} high</strong>
+                      <button className="button secondary" onClick={() => openHistoryItem(item)}>View Results</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {history.length > 0 && (
+                <button className="button secondary" onClick={clearHistory}>Clear Review History</button>
+              )}
+            </section>
+            <footer>CodeSentinel AI <span>·</span> Review History</footer>
+          </>
+        )}
+
+        {page === "settings" && (
+          <>
+            <header className="topbar">
+              <div>
+                <span className="eyebrow">DEVELOPER WORKSPACE / PREFERENCES</span>
+                <h1>Settings</h1>
+              </div>
+              <div className="top-status"><span /> CONFIGURATION</div>
+            </header>
+
+            <section className="panel page-panel">
+              <div className="panel-heading">⚙ APPLICATION SETTINGS</div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Appearance</strong>
+                  <p>Change the dashboard between dark and light themes.</p>
+                </div>
+                <button className="button secondary" onClick={() => changeTheme(!darkMode)}>
+                  {darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                </button>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Editor Font Size</strong>
+                  <p>Adjust the code editor text size.</p>
+                </div>
+                <div className="setting-controls">
+                  <button className="button secondary" onClick={() => changeFontSize(Math.max(10, fontSize - 1))}>A−</button>
+                  <strong>{fontSize}px</strong>
+                  <button className="button secondary" onClick={() => changeFontSize(Math.min(24, fontSize + 1))}>A+</button>
+                </div>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Default Programming Language</strong>
+                  <p>Choose the language selected when the application opens.</p>
+                </div>
+                <select value={defaultLanguage} onChange={(e) => changeDefaultLanguage(e.target.value)}>
+                  <option>Python</option>
+                  <option>JavaScript</option>
+                  <option>TypeScript</option>
+                  <option>Java</option>
+                  <option>C</option>
+                  <option>C++</option>
+                </select>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Notifications Preference</strong>
+                  <p>Save your preference for application notifications.</p>
+                </div>
+                <button className="button secondary" onClick={() => changeNotifications(!notifications)}>
+                  {notifications ? "Notifications: On" : "Notifications: Off"}
+                </button>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Analysis Engine</strong>
+                  <p>Local rule-based checks are currently enabled.</p>
+                </div>
+                <span className="result-count">ACTIVE</span>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Clear Review History</strong>
+                  <p>Remove all reviews stored in this session.</p>
+                </div>
+                <button className="button secondary" onClick={clearHistory}>Clear History</button>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <strong>Reset Settings</strong>
+                  <p>Restore all preferences to their default values.</p>
+                </div>
+                <button className="button secondary" onClick={resetSettings}>Reset Settings</button>
+              </div>
+
+              <p className="status-line">{status}</p>
+            </section>
+            <footer>CodeSentinel AI <span>·</span> Application Settings</footer>
+          </>
+        )}
       </main>
     </div>
   );
 }
+
+export default App;
